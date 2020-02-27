@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>如何优雅的停止服务（ShutdownHook） | yanchao&#39; blog</title>
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://yanchao0716.github.io/favicon.ico?v=1582812011745">
+<link rel="stylesheet" href="https://yanchao0716.github.io/styles/main.css">
+
+
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+
+
+
+    <meta name="description" content="JDK提供了Runtime.addShutdownHook(Thread hook)方法用来注册一个钩子(线程)，在Java程序退出时会调用这个钩子来清理现场。
+这个钩子会在以下场景中被调用：
+
+程序正常退出
+使用System.exit()..." />
+    <meta name="keywords" content="" />
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://yanchao0716.github.io">
+        <img src="https://yanchao0716.github.io/images/avatar.png?v=1582812011745" class="site-logo">
+        <h1 class="site-title">yanchao&#39; blog</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://yanchao0716.github.io/atom.xml" target="_blank">RSS</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">如何优雅的停止服务（ShutdownHook）</h2>
+            <div class="post-date">2020-02-27</div>
+            
+            <div class="post-content" v-pre>
+              <p>JDK提供了Runtime.addShutdownHook(Thread hook)方法用来注册一个钩子(线程)，在Java程序退出时会调用这个钩子来清理现场。</p>
+<p>这个钩子会在以下场景中被调用：</p>
+<ol>
+<li>程序正常退出</li>
+<li>使用System.exit()</li>
+<li>终端使用Ctrl+C触发的中断</li>
+<li>系统关闭</li>
+<li>OutOfMemory宕机</li>
+<li>使用Kill pid命令干掉进程（注：在使用kill -9 pid时，是不会被调用的）</li>
+</ol>
+<p>下面我们来简单的模拟一个服务，详细说明如何优雅的终止Java进程。</p>
+<pre><code>/**
+ * zyc 2017年10月16日 下午3:05:03
+ */
+public class ShutdownHookTest{
+	private static ExecutorService executorService = Executors.newFixedThreadPool(10);
+	private static final long TIMEOUT = 10 * 1000;
+	
+	public static void main(String[] args) {
+		
+		// 注册钩子函数，在JVM接收到停止指令后会运行该线程
+		Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+			@Override
+			public void run() {
+				System.out.println(&quot;invoke shutdownhook ....&quot;);
+				// 调用该方法把threadpool 的 shutdown 设置为true，不再接受提交任务，
+				// 等待已经提交的任务执行完之后才会退出
+				executorService.shutdown(); 
+				long time = System.currentTimeMillis();
+				while(true){
+					int activeCount = ((ThreadPoolExecutor)executorService).getActiveCount(); // 执行中的线程数
+					int waitCount = ((ThreadPoolExecutor)executorService).getQueue().size(); // 等待的线程数
+					System.out.println(&quot;there are &quot; + waitCount + &quot; threads wait ....&quot;);
+					System.out.println(&quot;there are &quot; + activeCount + &quot; threads working ....&quot;);
+					if(executorService.isTerminated()){ // 等待线程池退出
+						System.out.println(&quot;thread pool is shutdown ...&quot;);
+						break;
+					}
+					if(System.currentTimeMillis() - time &gt; TIMEOUT) // 超时
+						executorService.shutdownNow();
+					sleep(500);
+				}
+			}
+		}));
+		
+		// 模拟工作环境，不断往线程池提交任务
+		for(;;){
+			if(executorService.isShutdown())
+				break;
+			executorService.submit(new Runnable() {
+				@Override
+				public void run() {
+					String name = Thread.currentThread().getName();
+					System.out.println(name + &quot; work ....&quot;);
+					sleep(2 * 1000); // 模拟线程工作
+				}
+			});
+			sleep(500);
+		}
+	}
+	
+	
+	private static void sleep(long millis){
+		try {
+			TimeUnit.MILLISECONDS.sleep(millis);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+}
+
+</code></pre>
+<p>把代码打成Jar包在linux上运行 java –jar ShutdownHookTest.jar，输出如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNTUzODc3?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+线程池在持续工作，并不断的有任务提交。</p>
+<p>执行kill命令终止Java进程<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNjQ1MDU0?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+注意：这里用的是kill -15 pid 不是kill -9 pid</p>
+<p>Java进程接收到终止指令后，调用钩子方法，直到线程池里的所有任务都执行完毕才退出<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNzU4NzQ4?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>本文简单的模拟了关闭服务的场景，通过不断的轮询线程池的状态，直到所有提交的任务执行完毕才终止进程，清理的逻辑在钩子函数的run方法中实现即可，更多的功能请各位自己尝试。</p>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://yanchao0716.github.io/post/java-si-suo-fen-xi/">
+                  <h3 class="post-title">
+                    Java 死锁分析
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+<script type="application/javascript">
+
+AOS.init();
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+
+
+  </body>
+</html>

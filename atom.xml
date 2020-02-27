@@ -2,7 +2,7 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
     <id>https://yanchao0716.github.io</id>
     <title>yanchao&apos; blog</title>
-    <updated>2020-02-27T13:54:49.513Z</updated>
+    <updated>2020-02-27T14:00:16.414Z</updated>
     <generator>https://github.com/jpmonette/feed</generator>
     <link rel="alternate" href="https://yanchao0716.github.io"/>
     <link rel="self" href="https://yanchao0716.github.io/atom.xml"/>
@@ -10,6 +10,190 @@
     <logo>https://yanchao0716.github.io/images/avatar.png</logo>
     <icon>https://yanchao0716.github.io/favicon.ico</icon>
     <rights>All rights reserved 2020, yanchao&apos; blog</rights>
+    <entry>
+        <title type="html"><![CDATA[如何优雅的停止服务（ShutdownHook）]]></title>
+        <id>https://yanchao0716.github.io/post/ru-he-you-ya-de-ting-zhi-fu-wu-shutdownhook/</id>
+        <link href="https://yanchao0716.github.io/post/ru-he-you-ya-de-ting-zhi-fu-wu-shutdownhook/">
+        </link>
+        <updated>2020-02-27T13:58:11.000Z</updated>
+        <content type="html"><![CDATA[<p>JDK提供了Runtime.addShutdownHook(Thread hook)方法用来注册一个钩子(线程)，在Java程序退出时会调用这个钩子来清理现场。</p>
+<p>这个钩子会在以下场景中被调用：</p>
+<ol>
+<li>程序正常退出</li>
+<li>使用System.exit()</li>
+<li>终端使用Ctrl+C触发的中断</li>
+<li>系统关闭</li>
+<li>OutOfMemory宕机</li>
+<li>使用Kill pid命令干掉进程（注：在使用kill -9 pid时，是不会被调用的）</li>
+</ol>
+<p>下面我们来简单的模拟一个服务，详细说明如何优雅的终止Java进程。</p>
+<pre><code>/**
+ * zyc 2017年10月16日 下午3:05:03
+ */
+public class ShutdownHookTest{
+	private static ExecutorService executorService = Executors.newFixedThreadPool(10);
+	private static final long TIMEOUT = 10 * 1000;
+	
+	public static void main(String[] args) {
+		
+		// 注册钩子函数，在JVM接收到停止指令后会运行该线程
+		Runtime.getRuntime().addShutdownHook(new Thread(new Runnable() {
+			@Override
+			public void run() {
+				System.out.println(&quot;invoke shutdownhook ....&quot;);
+				// 调用该方法把threadpool 的 shutdown 设置为true，不再接受提交任务，
+				// 等待已经提交的任务执行完之后才会退出
+				executorService.shutdown(); 
+				long time = System.currentTimeMillis();
+				while(true){
+					int activeCount = ((ThreadPoolExecutor)executorService).getActiveCount(); // 执行中的线程数
+					int waitCount = ((ThreadPoolExecutor)executorService).getQueue().size(); // 等待的线程数
+					System.out.println(&quot;there are &quot; + waitCount + &quot; threads wait ....&quot;);
+					System.out.println(&quot;there are &quot; + activeCount + &quot; threads working ....&quot;);
+					if(executorService.isTerminated()){ // 等待线程池退出
+						System.out.println(&quot;thread pool is shutdown ...&quot;);
+						break;
+					}
+					if(System.currentTimeMillis() - time &gt; TIMEOUT) // 超时
+						executorService.shutdownNow();
+					sleep(500);
+				}
+			}
+		}));
+		
+		// 模拟工作环境，不断往线程池提交任务
+		for(;;){
+			if(executorService.isShutdown())
+				break;
+			executorService.submit(new Runnable() {
+				@Override
+				public void run() {
+					String name = Thread.currentThread().getName();
+					System.out.println(name + &quot; work ....&quot;);
+					sleep(2 * 1000); // 模拟线程工作
+				}
+			});
+			sleep(500);
+		}
+	}
+	
+	
+	private static void sleep(long millis){
+		try {
+			TimeUnit.MILLISECONDS.sleep(millis);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	}
+}
+
+</code></pre>
+<p>把代码打成Jar包在linux上运行 java –jar ShutdownHookTest.jar，输出如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNTUzODc3?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+线程池在持续工作，并不断的有任务提交。</p>
+<p>执行kill命令终止Java进程<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNjQ1MDU0?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+注意：这里用的是kill -15 pid 不是kill -9 pid</p>
+<p>Java进程接收到终止指令后，调用钩子方法，直到线程池里的所有任务都执行完毕才退出<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDE2MTUwNzU4NzQ4?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>本文简单的模拟了关闭服务的场景，通过不断的轮询线程池的状态，直到所有提交的任务执行完毕才终止进程，清理的逻辑在钩子函数的run方法中实现即可，更多的功能请各位自己尝试。</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Java 死锁分析]]></title>
+        <id>https://yanchao0716.github.io/post/java-si-suo-fen-xi/</id>
+        <link href="https://yanchao0716.github.io/post/java-si-suo-fen-xi/">
+        </link>
+        <updated>2020-02-27T13:56:23.000Z</updated>
+        <content type="html"><![CDATA[<p>发生死锁需要满足4个条件：</p>
+<ol>
+<li>互斥条件：一个资源每次只能被一个进程使用。</li>
+<li>请求与保持条件：一个进程因请求资源而阻塞时，对已获得的资源保持不放。</li>
+<li>不剥夺条件:进程已获得的资源，在末使用完之前，不能强行剥夺。</li>
+<li>循环等待条件:若干进程之间形成一种头尾相接的循环等待资源关系。</li>
+</ol>
+<p>下面代码模拟了死锁：</p>
+<pre><code>package me.zyc.lock.test;
+
+public class DeadLock{
+	public static void methodA(){
+		String thread_name = Thread.currentThread().getName();
+		System.out.println(thread_name + &quot; acquiring lock on LockA.class&quot;);
+		synchronized (LockA.class) {
+			System.out.println(thread_name + &quot; locked on LockA.class&quot;);
+			doSomething(); // wait other thread lock on LockB
+			System.out.println(thread_name + &quot; acquiring lock on LockB.class&quot;);
+			synchronized (LockB.class) {
+				System.out.println(thread_name + &quot;locked on LockB.class&quot;);
+				if(true) for(;;){}
+			}
+			System.out.println(thread_name + &quot; released lock on LockB.class&quot;);
+		}
+		System.out.println(thread_name + &quot; released lock on LockA.class&quot;);
+	}
+	
+	public static void methodB(){
+		String thread_name = Thread.currentThread().getName();
+		System.out.println(thread_name + &quot; acquiring lock on LockB.class&quot;);
+		synchronized (LockB.class) {
+			System.out.println(thread_name + &quot; locked on LockB.class&quot;);
+			doSomething();  // wait other thread lock on LockA
+			System.out.println(thread_name + &quot; acquiring lock on LockA.class&quot;);
+			synchronized (LockA.class) {
+				System.out.println(thread_name + &quot; locked on LockA.class&quot;);
+				if(true) for(;;){}
+			}
+			System.out.println(thread_name + &quot; released lock on LockA.class&quot;);
+		}
+		System.out.println(thread_name + &quot; released lock on LockB.class&quot;);
+	}
+	
+	public static void doSomething(){
+		try {
+			Thread.sleep(300);
+		} catch (InterruptedException e) {
+			e.printStackTrace();
+		}
+	} 
+	
+	public static void main(String[] args) {
+		new Thread(new Runnable() {
+			public void run() {
+				DeadLock.methodA();
+			}
+		}).start();
+		
+		new Thread(new Runnable() {
+			public void run() {
+				DeadLock.methodB();
+			}
+		}).start();
+	}
+	private class LockA{}
+	private class LockB{}
+}
+
+</code></pre>
+<p>代码运行输出如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcwOTI4MTQwNzUzOTYx?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<ol>
+<li>thread-0 获取了锁LockA，thread-1 获取了锁LockB。</li>
+<li>thread-0 尝试获取LockB，但是由于thread-1一直占用LockB未释放，thread-0被阻塞。</li>
+<li>thread-1尝试获取LockA，但是由于thread-0一直占用LockA未释放，thread-1被阻塞</li>
+</ol>
+<p>jstack是Java自带线程分析工具，用法如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcwOTI4MTQxNzAyMjYy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>执行jstack -l pid，结果如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcwOTI4MTQxNzM5ODg2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<ol>
+<li>thread-0 和 thread-1均处于<strong>BLOCKED</strong>状态。</li>
+<li>thread-0 获取了锁LockA，并等待获取LockB。</li>
+<li>thread-1 获取了锁LockB，并等待获取LockjA。</li>
+</ol>
+<p>在最后jstack给出了更详细的死锁信息<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcwOTI4MTQyMzM1ODM2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+]]></content>
+    </entry>
     <entry>
         <title type="html"><![CDATA[Spring @Scheduled线程模型探究 - 源码追踪]]></title>
         <id>https://yanchao0716.github.io/post/spring-scheduled-xian-cheng-mo-xing-tan-jiu-yuan-ma-zhui-zong/</id>
@@ -221,38 +405,6 @@ public class ScheduledTest {
 测试发现@Scheduled注解确实是单线程执行，执行method1和method2的线程都是scheduing-1，并且在打印完method1执行的log后5秒才打印method2的log，说明在这里scheduling-1在method1被阻塞了5秒。</p>
 <p>这里刚好验证了我们的猜想：<strong>被挂起的线程没有被唤醒，是因为执行唤醒和被挂起的是同一个线程</strong>。</p>
 <p>现在已经确定问题了，接下来就是怎么改。改之前去翻看下源码找到问题的根源，才能更好的解决问题，源码分析接下篇<a href="https://blog.csdn.net/zyc920716/article/details/104444109">《Spring @Scheduled线程模型探究 - 源码追踪》</a>。</p>
-]]></content>
-    </entry>
-    <entry>
-        <title type="html"><![CDATA[Hello Gridea]]></title>
-        <id>https://yanchao0716.github.io/post/hello-gridea/</id>
-        <link href="https://yanchao0716.github.io/post/hello-gridea/">
-        </link>
-        <updated>2018-12-11T16:00:00.000Z</updated>
-        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
-✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
-]]></summary>
-        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
-✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
-<!-- more -->
-<p><a href="https://github.com/getgridea/gridea">Github</a><br>
-<a href="https://gridea.dev/">Gridea 主页</a><br>
-<a href="http://fehey.com/">示例网站</a></p>
-<h2 id="特性">特性👇</h2>
-<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
-<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
-<p>🏷️  你可以对文章进行标签分组</p>
-<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
-<p>💻  你可以在 <strong>Windows</strong>，<strong>MacOS</strong> 或 <strong>Linux</strong> 设备上使用此客户端</p>
-<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
-<p>💬  你可以进行简单的配置，接入 <a href="https://github.com/gitalk/gitalk">Gitalk</a> 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
-<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
-<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
-<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
-<p>🌱 当然 <strong>Gridea</strong> 还很年轻，有很多不足，但请相信，它会不停向前 🏃</p>
-<p>未来，它一定会成为你离不开的伙伴</p>
-<p>尽情发挥你的才华吧！</p>
-<p>😘 Enjoy~</p>
 ]]></content>
     </entry>
 </feed>
