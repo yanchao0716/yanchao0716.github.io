@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>JDK源码走读之LinkedList | yanchao&#39; blog</title>
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://yanchao0716.github.io/favicon.ico?v=1582812174249">
+<link rel="stylesheet" href="https://yanchao0716.github.io/styles/main.css">
+
+
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+
+
+
+    <meta name="description" content="LinkedList本质是一个双端链表，双端链表区别于双向链表，双向链表之链表的首位相连，而双端链表则分别持有链表头尾两个节点，访问时既可以从头开始，也可以从尾部开始。
+链表结构
+
+定义
+LinkedList实现了List、Dequet接口..." />
+    <meta name="keywords" content="" />
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://yanchao0716.github.io">
+        <img src="https://yanchao0716.github.io/images/avatar.png?v=1582812174249" class="site-logo">
+        <h1 class="site-title">yanchao&#39; blog</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://yanchao0716.github.io/atom.xml" target="_blank">RSS</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">JDK源码走读之LinkedList</h2>
+            <div class="post-date">2020-02-27</div>
+            
+            <div class="post-content" v-pre>
+              <p>LinkedList本质是一个双端链表，双端链表区别于双向链表，双向链表之链表的首位相连，而双端链表则分别持有链表头尾两个节点，访问时既可以从头开始，也可以从尾部开始。</p>
+<p>链表结构<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI0MTY1NTMwMjAy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="定义">定义</h2>
+<p>LinkedList实现了List、Dequet接口使它兼具二者的特性，既支持集合的添加删除操作，又支持队列的出队入队操作</p>
+<pre><code>public class LinkedList&lt;E&gt; extends AbstractSequentialList&lt;E&gt; implements
+		List&lt;E&gt;, Deque&lt;E&gt;, Cloneable, java.io.Serializable {
+	transient int size = 0;
+	transient Node&lt;E&gt; first; // 队列头
+	transient Node&lt;E&gt; last; // 队列尾
+
+	......
+
+	private static class Node&lt;E&gt; {
+		E item;
+		Node&lt;E&gt; next;
+		Node&lt;E&gt; prev;
+
+		Node(Node&lt;E&gt; prev, E element, Node&lt;E&gt; next) {
+			this.item = element;
+			this.next = next;
+			this.prev = prev;
+		}
+	}
+}
+</code></pre>
+<h2 id="核心方法">核心方法</h2>
+<p>ArraList提供了对队列操作的几个核心方法，包括把数据添加到队列头部、中间、尾部，以及对应的移除方法。<br>
+其他List类型的add、get、remove等相关API实现，以及队列类型的push、pop、peek等相关的API实现，都是对这些核心方法的调用不再赘述。</p>
+<pre><code>// 把元素添加到队列头，并把添加入节点和first节点连接
+	// 新节点后继指向first节点，first节点前继指向新节点
+    private void linkFirst(E e) {
+        final Node&lt;E&gt; f = first;
+        // 创建一个新的节点，prev为null，next为当前头结点
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(null, e, f);
+        first = newNode;
+        if (f == null)
+        	// 如果当前头节点为null，说明队列为空，
+        	// 新加入的节点既是头节点又是尾节点
+            last = newNode;
+        else
+        	// 如果当前头结点不为空，
+        	// 则把头结点的prev指向新节点
+            f.prev = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 把元素添加到尾节点，并把last节点和新节点连接
+    // last节点的后继指向新节点，新节点的前继指向last
+    void linkLast(E e) {
+        final Node&lt;E&gt; l = last;
+        // 创建一个新的节点，prev为尾节点，next为null
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(l, e, null);
+        last = newNode;
+        if (l == null)
+        	// 如果尾节点为空，说明队列为空
+        	// 新加入的节点既是头节点又是尾节点
+            first = newNode;
+        else
+        	// 如果当前头结点不为空，
+        	// 则把尾节点的next指向新节点
+            l.next = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 在指定节点E的前边插入新节点
+    void linkBefore(E e, Node&lt;E&gt; succ) {
+        // assert succ != null;
+        final Node&lt;E&gt; pred = succ.prev;
+        // 创建节点，prev指向指定节点E的prev，next指向执行节点
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(pred, e, succ);
+        // 把指定节点的prev指向新节点
+        succ.prev = newNode;
+        if (pred == null)
+            // 如果指定节点E的前继节点为null，说明指定节点为头节点
+        	// 新插入的节点在头结点之前，成为新的头结点
+        	first = newNode;
+        else
+            pred.next = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 移除头结点，头结点的next节点晋升为新的头结点
+    private E unlinkFirst(Node&lt;E&gt; f) {
+        // assert f == first &amp;&amp; f != null;
+        final E element = f.item;
+        final Node&lt;E&gt; next = f.next;
+        // 释放引用，以便GC回收引用的对象
+        f.item = null;
+        f.next = null;
+        // 把头结点的next设为头结点
+        first = next;
+        if (next == null)
+        	// 如果头结点的next为null，说明队列中只有一个元素，
+        	// 释放头结点之后队列为空，头尾节点都为null
+            last = null;
+        else
+            next.prev = null;
+        size--;
+        modCount++;
+        return element;
+    }
+
+    // 移除尾节点
+    private E unlinkLast(Node&lt;E&gt; l) {
+        // assert l == last &amp;&amp; l != null;
+        final E element = l.item;
+        final Node&lt;E&gt; prev = l.prev;
+        // 释放引用，以便GC回收引用的对象
+        l.item = null;
+        l.prev = null; 
+        last = prev;
+        if (prev == null)
+        	// 如果前继节点为null，说明队列中只有一个元素，
+        	// 释放尾节点之后队列为空，头尾节点都为null
+            first = null;
+        else
+            prev.next = null;
+        size--;
+        modCount++;
+        return element;
+    }
+
+    // 释放任意节点，并使节点的pre、next互为前继、后继节点
+    E unlink(Node&lt;E&gt; x) {
+        // assert x != null;
+        final E element = x.item;
+        final Node&lt;E&gt; next = x.next;
+        final Node&lt;E&gt; prev = x.prev;
+        
+        if (prev == null) {
+        	// 如果节点的前继节点为空，说明当前节点是头结点
+        	// 把当前节点的后继节点作为头节点
+            first = next;
+        } else {
+        	// 前继节点的next指向后继节点
+            prev.next = next;
+            x.prev = null;
+        }
+
+        if (next == null) {
+        	// 如果当前节点的后继节点为空，则说明是尾节点
+        	// 删除当前节点之后，其前继节点作为尾节点
+            last = prev;
+        } else {
+        	// 删除当前节点之后，后继节点的prev指向前继节点
+            next.prev = prev;
+            x.next = null;
+        }
+        // 释放节点引用的对象，以便GC回收
+        x.item = null;
+        size--;
+        modCount++;
+        return element;
+}
+</code></pre>
+<h2 id="查找方法">查找方法</h2>
+<p>获取队列某个位置的元素，去元素时首先根据给定的偏移量判断元素从距离头部和尾部哪一端更近，再从近端开始遍历查找。 这是双端队列优势的体现。如一个长度为10000的队列，要获取第9999个元素，如果采用单端队列存储需要从第一个元素开始遍历到9999个元素；使用双端队列只需要从尾部开始往前遍历取第二个。</p>
+<pre><code>Node&lt;E&gt; node(int index) {
+	// 如果在队列的前半部分
+	if (index &lt; (size &gt;&gt; 1)) {
+		Node&lt;E&gt; x = first;
+		for (int i = 0; i &lt; index; i++)
+			x = x.next;
+		return x;
+	// 如果在队列的后半部分
+	} else {
+		Node&lt;E&gt; x = last;
+		for (int i = size - 1; i &gt; index; i--)
+			x = x.prev;
+		return x;
+	}
+}
+</code></pre>
+<h2 id="清空队列">清空队列</h2>
+<pre><code>// 清空队列
+public void clear() {
+	// 遍历队列，移除队列中的所有元素
+	for (Node&lt;E&gt; x = first; x != null; ) {
+		Node&lt;E&gt; next = x.next;
+		// 释放队列中的元素，以便GC回收
+		x.item = null;
+		x.next = null;
+		x.prev = null;
+		x = next;
+	}
+	first = last = null;
+	size = 0;
+	modCount++;
+}
+</code></pre>
+<h2 id="总结">总结</h2>
+<ol>
+<li>LinkedList有较高的插入、删除效率和不错的查询效率，对队列的头尾进行操作时间复杂度为O(1)，在指定位置操作时间复杂度为O(n)。</li>
+<li>LinkedList不是线程线程安全的。</li>
+</ol>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-arraylist/">
+                  <h3 class="post-title">
+                    JDK源码走读之ArrayList
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+<script type="application/javascript">
+
+AOS.init();
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+
+
+  </body>
+</html>

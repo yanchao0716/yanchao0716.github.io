@@ -2,7 +2,7 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
     <id>https://yanchao0716.github.io</id>
     <title>yanchao&apos; blog</title>
-    <updated>2020-02-27T14:00:57.632Z</updated>
+    <updated>2020-02-27T14:03:11.879Z</updated>
     <generator>https://github.com/jpmonette/feed</generator>
     <link rel="alternate" href="https://yanchao0716.github.io"/>
     <link rel="self" href="https://yanchao0716.github.io/atom.xml"/>
@@ -10,6 +10,460 @@
     <logo>https://yanchao0716.github.io/images/avatar.png</logo>
     <icon>https://yanchao0716.github.io/favicon.ico</icon>
     <rights>All rights reserved 2020, yanchao&apos; blog</rights>
+    <entry>
+        <title type="html"><![CDATA[JDK源码走读之ReentrantLock]]></title>
+        <id>https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-reentrantlock/</id>
+        <link href="https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-reentrantlock/">
+        </link>
+        <updated>2020-02-27T14:02:46.000Z</updated>
+        <content type="html"><![CDATA[<p>ReentrantLock的功能几乎等同于Synchronized，在分析源码之前，我们首先来明确一下ReentrantLock要实现的功能，这样才能做到有的放矢。</p>
+<ol>
+<li>控制线程执行顺序。当线程获取锁进入Synchronized代码块（获取监视器），其余线程必须等待该线程执行完毕，才能继续执行该代码块。</li>
+<li>提供线程通信功能。Synchronized关键字支持在其代码块中使用await、notify、notifyAll来进行线通信。执行await会使当前线程释放掉锁进入阻塞状态，直到被其他线程执行notify、notifyAll唤醒。</li>
+</ol>
+<p>ReentrantLock通过lock()、unlock()方法控制线程执行顺序，Condition.await()和Condition.signal()实现线程通信。</p>
+<p><strong>类图</strong><br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTEzMjEwMjM4NzU2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>ReentrantLock主要依赖AbstractQueuedSynchronized(以下简称AQS)实现。AQS继承父类AbstractOwnableSychronized特性能够持有一个线程，它自身还维护Node和ConditionObject两个队列。</p>
+<ol>
+<li>ReentrantLock使用AQS能够持有一个线程的特性来标识当前正在执行的线程。</li>
+<li>ReentrantLock把Node队列用作同步队列，用来存放获取锁失败的线程；把ConditionObject用作阻塞队列，用来存放阻塞线程(执行await方法)。</li>
+</ol>
+<p><strong>定义</strong></p>
+<pre><code>public class ReentrantLock {
+	private final Sync sync;
+	public void lock() {
+        sync.lock();
+    }
+	public void unlock() {
+        sync.release(1);
+    }
+	public Condition newCondition() {
+        return sync.newCondition();
+    }
+	abstract static class Sync extends AbstractQueuedSynchronizer {...}
+	static final class FairSync extends Sync{...}
+	static final class NonfairSync extends Sync{...}
+}
+
+</code></pre>
+<p>ReentrantLock使用策略模式提供公平锁和非公平锁两种实现。使用无参构造方法默认使用非公平策略，也可以使用带参构造方法来显示指定使用策略。<br>
+公平策略类似FIFO，能保证等待时间最长的线程先执行。非公平策略不能保证这一点。</p>
+<figure data-type="image" tabindex="1"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxMDQyNjA2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<p><strong>加锁(lock、tryLock)</strong></p>
+<p>执行lock方法调用链如下，根据初始化时指定的策略调用FairSync.lock或NoneFairSync.lock<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxMTIzMzE0?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p><strong>公平锁</strong></p>
+<figure data-type="image" tabindex="2"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxMzQyNzAw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<p>lock()方法调用acquire(int arg)方法实现加锁，在其爷爷类AQS中实现如下：</p>
+<figure data-type="image" tabindex="3"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxNDIxNDY3?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<p>首先调用tryAcquire(int arg)方法尝试获取锁，如果获取锁失败把当前线程加入同步队列，最后执行selfInterrupt()中断当前线程执行。</p>
+<ol>
+<li>使用AQS的tryAcquire(int arg)尝试获取锁，该方法由子类重写覆盖，实际执行的是上图公平锁的tryAcquire(int acquires)方法。如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxNTE5NTQ1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></li>
+</ol>
+<p>A. getState()方法获取线程状态(是否持有锁)，如果没有获取锁（c==0），执行b，否则执行c。(AQS用state变量标识线程的状态，每次获取锁会对state加1，0表示没有线程持有锁。)<br>
+B. 如果没有比当前线程等待更长时间的线程，尝试使用CAS操作修改state状态用来标识当前线程已经获取锁，如果前两步都成功，则修改AQS持有线程为当前线程。<br>
+C. state不为零，说明当前线程已经持有锁，则利用CAS操作对state加acquires。这里体现了锁的可重入性。即：如果当前线程已经持有锁，再次请求锁会对state进行加1，state的值就代表线程获取锁的次数。每次释放对其进行减1，直到state为0锁才真正被释放掉。</p>
+<ol start="2">
+<li>
+<p>如果获取锁失败则执行acquireQueued(addWaiter(Node.EXCLUSIVE), arg)把线程加入同步队列，并不断轮询队列，直到队列头结点获取锁成功。<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxODUyNzM2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+</li>
+<li>
+<p>如果线程获取锁失败(第1步)，并且当前线程应该被阻断，则执行selfInterrupt()阻断线程执行。</p>
+</li>
+</ol>
+<p><strong>非公平锁</strong><br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcxOTQ1NzUw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>非公平锁与公平锁类似，实现相对简单。它不用关心是否有线程比当前线程等待时间更长，采用抢占式的方式执行，因此执行效率会更高一些。</p>
+<ol>
+<li>直接用CAS操作对state变量进行修改，如果修改成功则设置持有锁的线程为当前线程。这里设计的很巧妙，假设当前线程没有获取锁直接用compareAndSetState(0, 1)进行修改state值，而不是先获取state值，再进行一系列的操作进行修改state。由于锁重入的情况相对较少，这么设计有效的提高执行效率。</li>
+<li>如果获取锁失败，则执行acquire(int arg)进行加锁，调用过程类似公平锁，tryAcquire(int arg)方法实际调用的是此处的tryAcquire(int acquires)方法，nofairTryAcquire方法在父类Sync中实现，相比公平锁的tryAcquire方法，少了hasQueuedPredecessors()方法判断是否有线程比当前线程等待时间更长。<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMTE3MTc5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></li>
+</ol>
+<p><strong>释放锁(unlock)</strong><br>
+解锁调用过程如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMTQ2NzIy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<figure data-type="image" tabindex="4"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMjA1NTEw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<figure data-type="image" tabindex="5"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMjI0NDIw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<figure data-type="image" tabindex="6"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMjQxMzI4?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol>
+<li>调用tryRelease(int relaese)方法释放锁，修改锁信息。从图中可以看到只有state的值为0时，才真正执行setExclusiveOwnerThread(null)释放锁。</li>
+<li>如果释放锁成功，执行unparkSuccessor(Node node)唤醒下一个节点。代码如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyMzU5MzIw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></li>
+</ol>
+<p><strong>等待(await)</strong><br>
+上文提到，ReentrantLock是借助AQS的ConditionObject队列实现的线程通信。</p>
+<ul>
+<li>执行await()方法，线程阻塞并加入ConditionObject队列</li>
+<li>执行signal()方法，唤醒线程阻塞线程出队列。</li>
+</ul>
+<p>下面是ConditionObject.await()方法的实现<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyNTAyNjgw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<ol>
+<li>把当前线程加入阻塞队列</li>
+<li>如果当前线程不在同步队列中(说明该线程已经从同步队列出队，正在CPU上执行)，则不断尝试执行LockSupport.park(this)挂起该线程。</li>
+</ol>
+<p><strong>唤醒(signal)</strong></p>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyNjU0OTE1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyNzE5NDk1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<ol>
+<li>singal()和signalAll()方法类似notify和notifyAll方法。singal()方法只是使阻塞队列的第一个节点出队，而singalAll()则是所有节点都出队。</li>
+<li>出队的节点执行transferForSingal(Node node)方法进行唤醒，并加入同步队列。<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMTExMTcyODAyOTk2?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></li>
+</ol>
+<p><strong>总结</strong></p>
+<ol>
+<li>ReentrantLock提供公平锁和非公平锁两种加锁策略，非公平锁的执行效率比公平锁高。</li>
+<li>线程获取锁(lock)成功会继续执行，失败则被加入同步队列。</li>
+<li>线程间的通信是通过ConditionObject实现的，执行await线程入队，singal、singalAll线程出队。</li>
+</ol>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[JDK源码走读之深入理解线程池(ThreadPoolExecutor)]]></title>
+        <id>https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-shen-ru-li-jie-xian-cheng-chi-threadpoolexecutor/</id>
+        <link href="https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-shen-ru-li-jie-xian-cheng-chi-threadpoolexecutor/">
+        </link>
+        <updated>2020-02-27T14:02:10.000Z</updated>
+        <content type="html"><![CDATA[<p>Java线程池提供了一个框架来统一管理线程，通过把提交任务和执行任务解耦，使开发者无需关心线程的运行状态，只要把任务提交给线程池既可。使用线程池有以下好处：</p>
+<ol>
+<li>减少在创建和销毁线程上所花的时间以及系统资源的开销</li>
+<li>避免创建过多的线程导致系统资源过度消耗、系统执行效率低下</li>
+</ol>
+<p>线程池可以通过工厂类Executors创建，大致分为以下几种：</p>
+<ol>
+<li>newFixedThreadPool(int nThreads) 创建一个定长线程池，可控制线程最大并发数，超出的线程会在队列中等待</li>
+<li>newSingleThreadExecutor 创建一个单线程化的线程池，它只会用唯一的工作线程来执行任务，保证所有任务按照指定顺序(FIFO, LIFO, 优先级)执行</li>
+<li>newCachedThreadPool 创建一个可缓存线程池，如果线程池长度超过处理需要，可灵活回收空闲线程，若无可回收，则新建线程</li>
+<li>newScheduledThreadPool 创建一个定长线程池，支持定时及周期性任务执行</li>
+</ol>
+<figure data-type="image" tabindex="1"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExMzE2NzU5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<p>下面深入源码来分析一下线程池的实现</p>
+<h2 id="executor框架">Executor框架</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNDAwODEy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Executor接口是整个框架的基础，下面所有类和接口都是对Executor的扩展。ThreadPoolExecutor和ScheduledThreadPoolExecutor是线程池的俩个核心类，前者是普通的线程池，后者继承前者扩展了任务定时、延迟执行等功能。<br>
+Executors则是一个工厂类，屏蔽了线程池的创建过程，通过调用不同的方法传入合适的参数类实例化不同类型的线程池。<br>
+## ThreadPoolExecutor 定义##<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNjA0MjYw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+ThreadPoolExecutor主要由4部分构成</p>
+<ol>
+<li>线程池的状态，运行、终止、当前线程数等等，用于对线程池监控</li>
+<li>工作队列，用来保存提交的任务，队列可以有不同类型的实现</li>
+<li>工作（消费）线程，用来执行工作队列里的任务</li>
+<li>提交任务方法，以及一些其他方法</li>
+</ol>
+<h2 id="任务处理流程">任务处理流程</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNzM1MDEz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+线程池的核心是生产者消费者模型，提交一个新的任务主要流程如图所示：</p>
+<ol>
+<li>线程池里的线程是否小于核心线程数，如果是则创建一个新的线程执行任务，如果不是执行2</li>
+<li>工作队列是否已满，如果没有满则把任务放入队列中，如果满了执行3</li>
+<li>判断线程池是否已满（到达线程个数上限），如果没满则创建新的线程执行任务，如果满了执行4</li>
+<li>按照定义的不同策略处理无法执行的任务，如直接抛弃任务、抛出异常等等</li>
+</ol>
+<h2 id="worker">Worker</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExODU1Nzgz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Worker为ThreadPoolExecutor的静态内部类，实现了runnable接口并集成了AbstractQueuedSynchonrizer类，这个类有两个主要的成员变量。</p>
+<ol>
+<li>
+<pre><code>firstTask用来保存runnable任务，提交新任务到线程池，当核心线程池不满时会创建worker并且把提交的任务赋给这个worker，确保当前任务优先执行。
+</code></pre>
+</li>
+<li>
+<pre><code>thread对象，每创建一个worker都会对应创建一个thread对象，并且把worker自身作为task传入thread，这样执行thread.start就可以调用到worker的run方法
+</code></pre>
+</li>
+</ol>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMDI0NTcz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Worker的run方法调用外部类的runWorker方法</p>
+<ol>
+<li>循环调用getTask()方法获取队列中的任务执行，执行前加锁执行结束释放锁</li>
+<li>执行任务前后根据业务场景自定义beforeExecute和afterExecute方法</li>
+</ol>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMjA1MDc5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+getTask方法会不断的循环，从队列中取任务</p>
+<ol>
+<li>workQueue.take：如果阻塞队列为空，当前线程会被挂起等待；当队列中有任务加入时，线程被唤醒，take方法返回任务，并执行；</li>
+<li>workQueue.poll：如果在keepAliveTime时间内，阻塞队列还是没有任务，则返回null；</li>
+</ol>
+<h2 id="提交任务">提交任务</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMjU2MTY1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+调用execute(Runnable command)方法把任务提交到线程池</p>
+<ol>
+<li>线程池里的线程小于核心线程数，创建新的线程</li>
+<li>队列未满(往队列里添加任务成功)</li>
+<li>当核心线程已满，队列已满的情况下尝试创建非核心线程</li>
+</ol>
+<figure data-type="image" tabindex="2"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMzU0MDAy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol start="4">
+<li>首选判断线程池的状态，如果线程池的状态值大于SHUTDOWN，则不处理提交任务，直接返回</li>
+<li>如果线程数量不满足要求，则直接返回不做处理。添加核心线程要求当前线程数小于核心线程数；添加非核心线程要求当前线程数小于线程池数量上限；且线程最大不能超过最大容量</li>
+<li>利用CAS尝试修改线程个数使其+1，如果成功则直接跳出循环，开始创建线程</li>
+</ol>
+<figure data-type="image" tabindex="3"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyNTI2MjU3?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol>
+<li>把提交的任务最为task构造worker</li>
+<li>把任务添加到工作队列，在添加之前获取锁添加完成释放，防止并发造成数据异常</li>
+<li>最后执行t.start()启动worker，worker会通过run方法调用外部类的runWorker方法不断的从任务队列中消费任务</li>
+</ol>
+<h2 id="创建线程池">创建线程池</h2>
+<figure data-type="image" tabindex="4"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyNjUyOTk1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol>
+<li>corePoolSize 核心线程数线程池中的核心线程数，当提交一个任务时，线程池创建一个新线程执行任务，直到当前线程数等于corePoolSize；如果当前线程数为corePoolSize，继续提交的任务被保存到阻塞队列中，等待被执行；如果执行了线程池的prestartAllCoreThreads()方法，线程池会提前创建并启动所有核心线程。</li>
+<li>线程池中允许的最大线程数。如果当前阻塞队列满了，且继续提交任务，则创建新的线程执行任务，前提是当前线程数小于maximumPoolSize；</li>
+<li>线程空闲时的存活时间，即当线程没有任务执行时，继续存活的时间；默认情况下，该参数只在线程数大于corePoolSize时才有用；</li>
+<li>keepAliveTime的单位；</li>
+<li>用来保存执行任务的阻塞队列，该队列泛型限制只接收Runnable类型的元素。根据传入的队列性质不同，线程池的特性也不同。</li>
+</ol>
+<p>Executors是对构造方法的封装，通过传入不同的参数，使线程池具有不同的特性，不再详细描述。</p>
+<h2 id="总结">总结</h2>
+<ol>
+<li>每个worker对应一个thread，线程池通过控制worker的数量来控制并发线程数</li>
+<li>线程池实质是一个生产者消费者模型，它有一个任务队列和一个消费线程集合组成。</li>
+<li>任务通常会被提交到队列中，由消费线程执行。</li>
+<li>运行的worker线程会通过run方法调用外部类的runWorker方法不断消费任务。</li>
+</ol>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[深入源码剖析Thread.join实现]]></title>
+        <id>https://yanchao0716.github.io/post/shen-ru-yuan-ma-pou-xi-threadjoin-shi-xian/</id>
+        <link href="https://yanchao0716.github.io/post/shen-ru-yuan-ma-pou-xi-threadjoin-shi-xian/">
+        </link>
+        <updated>2020-02-27T14:01:38.000Z</updated>
+        <content type="html"><![CDATA[<p>java.lang.Thread类提供一个方法join可以阻塞主线程(调用join方法的线程)，直到当前线程执行完。用法如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNTU3Nzk5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>join会保证t2在t1线程执行完退出之后再执行，程序执行结果总是如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNjMxODI5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="定义">定义</h2>
+<figure data-type="image" tabindex="1"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNzI1OTIw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<h2 id="实现">实现</h2>
+<p>该方法掉用了join（0）方法， 我们跟进查看具体实现。注意这里是一个静态方法加了同步锁，锁的是this，也就是当前类实例。我们知道在线程获取了锁以后再执行wait方法，会让线程释放掉锁，并且进入到等待阻塞状态，线程被唤醒或等待一定时间之后以后获取锁后会重新从wait的地方往下执行。<br>
+作者巧用了这个原理，先获取锁再调用wait(0)释放锁并让主线程进入等待阻塞。并且循环执行，一旦主线程重新获取锁就立马释放。这样就保证了主线程一直得不到执行。<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxODEzMzky?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>按照上诉代码，如果执行t.join(10 * 1000)那么主线程会阻塞10s，而事实并非如此，请看下面测试代码<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxODQzMDU0?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>输出如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxOTA2NDEx?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>这说明t线程执行完，main线程就得到执行，并没有阻塞10s，也就是说main线程得到了唤醒。翻看JVM源码发现在线程结束的时候会调用lock.notify_all(thread)唤醒线程<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxOTMyMzU5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="总结">总结</h2>
+<ol>
+<li>java.lang.Thread.join方法通过循环阻塞主线程的方式保证当前线程优先执行</li>
+<li>当前线程执行完之后会立马唤醒主线程继续执行</li>
+</ol>
+<p>文章参考：https://www.zhihu.com/question/44621343/answer/97640972</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[JDK源码走读之LinkedList]]></title>
+        <id>https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-linkedlist/</id>
+        <link href="https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-linkedlist/">
+        </link>
+        <updated>2020-02-27T14:01:12.000Z</updated>
+        <content type="html"><![CDATA[<p>LinkedList本质是一个双端链表，双端链表区别于双向链表，双向链表之链表的首位相连，而双端链表则分别持有链表头尾两个节点，访问时既可以从头开始，也可以从尾部开始。</p>
+<p>链表结构<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI0MTY1NTMwMjAy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="定义">定义</h2>
+<p>LinkedList实现了List、Dequet接口使它兼具二者的特性，既支持集合的添加删除操作，又支持队列的出队入队操作</p>
+<pre><code>public class LinkedList&lt;E&gt; extends AbstractSequentialList&lt;E&gt; implements
+		List&lt;E&gt;, Deque&lt;E&gt;, Cloneable, java.io.Serializable {
+	transient int size = 0;
+	transient Node&lt;E&gt; first; // 队列头
+	transient Node&lt;E&gt; last; // 队列尾
+
+	......
+
+	private static class Node&lt;E&gt; {
+		E item;
+		Node&lt;E&gt; next;
+		Node&lt;E&gt; prev;
+
+		Node(Node&lt;E&gt; prev, E element, Node&lt;E&gt; next) {
+			this.item = element;
+			this.next = next;
+			this.prev = prev;
+		}
+	}
+}
+</code></pre>
+<h2 id="核心方法">核心方法</h2>
+<p>ArraList提供了对队列操作的几个核心方法，包括把数据添加到队列头部、中间、尾部，以及对应的移除方法。<br>
+其他List类型的add、get、remove等相关API实现，以及队列类型的push、pop、peek等相关的API实现，都是对这些核心方法的调用不再赘述。</p>
+<pre><code>// 把元素添加到队列头，并把添加入节点和first节点连接
+	// 新节点后继指向first节点，first节点前继指向新节点
+    private void linkFirst(E e) {
+        final Node&lt;E&gt; f = first;
+        // 创建一个新的节点，prev为null，next为当前头结点
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(null, e, f);
+        first = newNode;
+        if (f == null)
+        	// 如果当前头节点为null，说明队列为空，
+        	// 新加入的节点既是头节点又是尾节点
+            last = newNode;
+        else
+        	// 如果当前头结点不为空，
+        	// 则把头结点的prev指向新节点
+            f.prev = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 把元素添加到尾节点，并把last节点和新节点连接
+    // last节点的后继指向新节点，新节点的前继指向last
+    void linkLast(E e) {
+        final Node&lt;E&gt; l = last;
+        // 创建一个新的节点，prev为尾节点，next为null
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(l, e, null);
+        last = newNode;
+        if (l == null)
+        	// 如果尾节点为空，说明队列为空
+        	// 新加入的节点既是头节点又是尾节点
+            first = newNode;
+        else
+        	// 如果当前头结点不为空，
+        	// 则把尾节点的next指向新节点
+            l.next = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 在指定节点E的前边插入新节点
+    void linkBefore(E e, Node&lt;E&gt; succ) {
+        // assert succ != null;
+        final Node&lt;E&gt; pred = succ.prev;
+        // 创建节点，prev指向指定节点E的prev，next指向执行节点
+        final Node&lt;E&gt; newNode = new Node&lt;&gt;(pred, e, succ);
+        // 把指定节点的prev指向新节点
+        succ.prev = newNode;
+        if (pred == null)
+            // 如果指定节点E的前继节点为null，说明指定节点为头节点
+        	// 新插入的节点在头结点之前，成为新的头结点
+        	first = newNode;
+        else
+            pred.next = newNode;
+        size++;
+        modCount++;
+    }
+
+    // 移除头结点，头结点的next节点晋升为新的头结点
+    private E unlinkFirst(Node&lt;E&gt; f) {
+        // assert f == first &amp;&amp; f != null;
+        final E element = f.item;
+        final Node&lt;E&gt; next = f.next;
+        // 释放引用，以便GC回收引用的对象
+        f.item = null;
+        f.next = null;
+        // 把头结点的next设为头结点
+        first = next;
+        if (next == null)
+        	// 如果头结点的next为null，说明队列中只有一个元素，
+        	// 释放头结点之后队列为空，头尾节点都为null
+            last = null;
+        else
+            next.prev = null;
+        size--;
+        modCount++;
+        return element;
+    }
+
+    // 移除尾节点
+    private E unlinkLast(Node&lt;E&gt; l) {
+        // assert l == last &amp;&amp; l != null;
+        final E element = l.item;
+        final Node&lt;E&gt; prev = l.prev;
+        // 释放引用，以便GC回收引用的对象
+        l.item = null;
+        l.prev = null; 
+        last = prev;
+        if (prev == null)
+        	// 如果前继节点为null，说明队列中只有一个元素，
+        	// 释放尾节点之后队列为空，头尾节点都为null
+            first = null;
+        else
+            prev.next = null;
+        size--;
+        modCount++;
+        return element;
+    }
+
+    // 释放任意节点，并使节点的pre、next互为前继、后继节点
+    E unlink(Node&lt;E&gt; x) {
+        // assert x != null;
+        final E element = x.item;
+        final Node&lt;E&gt; next = x.next;
+        final Node&lt;E&gt; prev = x.prev;
+        
+        if (prev == null) {
+        	// 如果节点的前继节点为空，说明当前节点是头结点
+        	// 把当前节点的后继节点作为头节点
+            first = next;
+        } else {
+        	// 前继节点的next指向后继节点
+            prev.next = next;
+            x.prev = null;
+        }
+
+        if (next == null) {
+        	// 如果当前节点的后继节点为空，则说明是尾节点
+        	// 删除当前节点之后，其前继节点作为尾节点
+            last = prev;
+        } else {
+        	// 删除当前节点之后，后继节点的prev指向前继节点
+            next.prev = prev;
+            x.next = null;
+        }
+        // 释放节点引用的对象，以便GC回收
+        x.item = null;
+        size--;
+        modCount++;
+        return element;
+}
+</code></pre>
+<h2 id="查找方法">查找方法</h2>
+<p>获取队列某个位置的元素，去元素时首先根据给定的偏移量判断元素从距离头部和尾部哪一端更近，再从近端开始遍历查找。 这是双端队列优势的体现。如一个长度为10000的队列，要获取第9999个元素，如果采用单端队列存储需要从第一个元素开始遍历到9999个元素；使用双端队列只需要从尾部开始往前遍历取第二个。</p>
+<pre><code>Node&lt;E&gt; node(int index) {
+	// 如果在队列的前半部分
+	if (index &lt; (size &gt;&gt; 1)) {
+		Node&lt;E&gt; x = first;
+		for (int i = 0; i &lt; index; i++)
+			x = x.next;
+		return x;
+	// 如果在队列的后半部分
+	} else {
+		Node&lt;E&gt; x = last;
+		for (int i = size - 1; i &gt; index; i--)
+			x = x.prev;
+		return x;
+	}
+}
+</code></pre>
+<h2 id="清空队列">清空队列</h2>
+<pre><code>// 清空队列
+public void clear() {
+	// 遍历队列，移除队列中的所有元素
+	for (Node&lt;E&gt; x = first; x != null; ) {
+		Node&lt;E&gt; next = x.next;
+		// 释放队列中的元素，以便GC回收
+		x.item = null;
+		x.next = null;
+		x.prev = null;
+		x = next;
+	}
+	first = last = null;
+	size = 0;
+	modCount++;
+}
+</code></pre>
+<h2 id="总结">总结</h2>
+<ol>
+<li>LinkedList有较高的插入、删除效率和不错的查询效率，对队列的头尾进行操作时间复杂度为O(1)，在指定位置操作时间复杂度为O(n)。</li>
+<li>LinkedList不是线程线程安全的。</li>
+</ol>
+]]></content>
+    </entry>
     <entry>
         <title type="html"><![CDATA[JDK源码走读之ArrayList]]></title>
         <id>https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-arraylist/</id>

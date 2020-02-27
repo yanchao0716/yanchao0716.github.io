@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>JDK源码走读之深入理解线程池(ThreadPoolExecutor) | yanchao&#39; blog</title>
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://yanchao0716.github.io/favicon.ico?v=1582812174249">
+<link rel="stylesheet" href="https://yanchao0716.github.io/styles/main.css">
+
+
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+
+
+
+    <meta name="description" content="Java线程池提供了一个框架来统一管理线程，通过把提交任务和执行任务解耦，使开发者无需关心线程的运行状态，只要把任务提交给线程池既可。使用线程池有以下好处：
+
+减少在创建和销毁线程上所花的时间以及系统资源的开销
+避免创建过多的线程导致系统资..." />
+    <meta name="keywords" content="" />
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://yanchao0716.github.io">
+        <img src="https://yanchao0716.github.io/images/avatar.png?v=1582812174249" class="site-logo">
+        <h1 class="site-title">yanchao&#39; blog</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://yanchao0716.github.io/atom.xml" target="_blank">RSS</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">JDK源码走读之深入理解线程池(ThreadPoolExecutor)</h2>
+            <div class="post-date">2020-02-27</div>
+            
+            <div class="post-content" v-pre>
+              <p>Java线程池提供了一个框架来统一管理线程，通过把提交任务和执行任务解耦，使开发者无需关心线程的运行状态，只要把任务提交给线程池既可。使用线程池有以下好处：</p>
+<ol>
+<li>减少在创建和销毁线程上所花的时间以及系统资源的开销</li>
+<li>避免创建过多的线程导致系统资源过度消耗、系统执行效率低下</li>
+</ol>
+<p>线程池可以通过工厂类Executors创建，大致分为以下几种：</p>
+<ol>
+<li>newFixedThreadPool(int nThreads) 创建一个定长线程池，可控制线程最大并发数，超出的线程会在队列中等待</li>
+<li>newSingleThreadExecutor 创建一个单线程化的线程池，它只会用唯一的工作线程来执行任务，保证所有任务按照指定顺序(FIFO, LIFO, 优先级)执行</li>
+<li>newCachedThreadPool 创建一个可缓存线程池，如果线程池长度超过处理需要，可灵活回收空闲线程，若无可回收，则新建线程</li>
+<li>newScheduledThreadPool 创建一个定长线程池，支持定时及周期性任务执行</li>
+</ol>
+<figure data-type="image" tabindex="1"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExMzE2NzU5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<p>下面深入源码来分析一下线程池的实现</p>
+<h2 id="executor框架">Executor框架</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNDAwODEy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Executor接口是整个框架的基础，下面所有类和接口都是对Executor的扩展。ThreadPoolExecutor和ScheduledThreadPoolExecutor是线程池的俩个核心类，前者是普通的线程池，后者继承前者扩展了任务定时、延迟执行等功能。<br>
+Executors则是一个工厂类，屏蔽了线程池的创建过程，通过调用不同的方法传入合适的参数类实例化不同类型的线程池。<br>
+## ThreadPoolExecutor 定义##<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNjA0MjYw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+ThreadPoolExecutor主要由4部分构成</p>
+<ol>
+<li>线程池的状态，运行、终止、当前线程数等等，用于对线程池监控</li>
+<li>工作队列，用来保存提交的任务，队列可以有不同类型的实现</li>
+<li>工作（消费）线程，用来执行工作队列里的任务</li>
+<li>提交任务方法，以及一些其他方法</li>
+</ol>
+<h2 id="任务处理流程">任务处理流程</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExNzM1MDEz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+线程池的核心是生产者消费者模型，提交一个新的任务主要流程如图所示：</p>
+<ol>
+<li>线程池里的线程是否小于核心线程数，如果是则创建一个新的线程执行任务，如果不是执行2</li>
+<li>工作队列是否已满，如果没有满则把任务放入队列中，如果满了执行3</li>
+<li>判断线程池是否已满（到达线程个数上限），如果没满则创建新的线程执行任务，如果满了执行4</li>
+<li>按照定义的不同策略处理无法执行的任务，如直接抛弃任务、抛出异常等等</li>
+</ol>
+<h2 id="worker">Worker</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjExODU1Nzgz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Worker为ThreadPoolExecutor的静态内部类，实现了runnable接口并集成了AbstractQueuedSynchonrizer类，这个类有两个主要的成员变量。</p>
+<ol>
+<li>
+<pre><code>firstTask用来保存runnable任务，提交新任务到线程池，当核心线程池不满时会创建worker并且把提交的任务赋给这个worker，确保当前任务优先执行。
+</code></pre>
+</li>
+<li>
+<pre><code>thread对象，每创建一个worker都会对应创建一个thread对象，并且把worker自身作为task传入thread，这样执行thread.start就可以调用到worker的run方法
+</code></pre>
+</li>
+</ol>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMDI0NTcz?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+Worker的run方法调用外部类的runWorker方法</p>
+<ol>
+<li>循环调用getTask()方法获取队列中的任务执行，执行前加锁执行结束释放锁</li>
+<li>执行任务前后根据业务场景自定义beforeExecute和afterExecute方法</li>
+</ol>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMjA1MDc5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+getTask方法会不断的循环，从队列中取任务</p>
+<ol>
+<li>workQueue.take：如果阻塞队列为空，当前线程会被挂起等待；当队列中有任务加入时，线程被唤醒，take方法返回任务，并执行；</li>
+<li>workQueue.poll：如果在keepAliveTime时间内，阻塞队列还是没有任务，则返回null；</li>
+</ol>
+<h2 id="提交任务">提交任务</h2>
+<p><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMjU2MTY1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"><br>
+调用execute(Runnable command)方法把任务提交到线程池</p>
+<ol>
+<li>线程池里的线程小于核心线程数，创建新的线程</li>
+<li>队列未满(往队列里添加任务成功)</li>
+<li>当核心线程已满，队列已满的情况下尝试创建非核心线程</li>
+</ol>
+<figure data-type="image" tabindex="2"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyMzU0MDAy?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol start="4">
+<li>首选判断线程池的状态，如果线程池的状态值大于SHUTDOWN，则不处理提交任务，直接返回</li>
+<li>如果线程数量不满足要求，则直接返回不做处理。添加核心线程要求当前线程数小于核心线程数；添加非核心线程要求当前线程数小于线程池数量上限；且线程最大不能超过最大容量</li>
+<li>利用CAS尝试修改线程个数使其+1，如果成功则直接跳出循环，开始创建线程</li>
+</ol>
+<figure data-type="image" tabindex="3"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyNTI2MjU3?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol>
+<li>把提交的任务最为task构造worker</li>
+<li>把任务添加到工作队列，在添加之前获取锁添加完成释放，防止并发造成数据异常</li>
+<li>最后执行t.start()启动worker，worker会通过run方法调用外部类的runWorker方法不断的从任务队列中消费任务</li>
+</ol>
+<h2 id="创建线程池">创建线程池</h2>
+<figure data-type="image" tabindex="4"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI4MjEyNjUyOTk1?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<ol>
+<li>corePoolSize 核心线程数线程池中的核心线程数，当提交一个任务时，线程池创建一个新线程执行任务，直到当前线程数等于corePoolSize；如果当前线程数为corePoolSize，继续提交的任务被保存到阻塞队列中，等待被执行；如果执行了线程池的prestartAllCoreThreads()方法，线程池会提前创建并启动所有核心线程。</li>
+<li>线程池中允许的最大线程数。如果当前阻塞队列满了，且继续提交任务，则创建新的线程执行任务，前提是当前线程数小于maximumPoolSize；</li>
+<li>线程空闲时的存活时间，即当线程没有任务执行时，继续存活的时间；默认情况下，该参数只在线程数大于corePoolSize时才有用；</li>
+<li>keepAliveTime的单位；</li>
+<li>用来保存执行任务的阻塞队列，该队列泛型限制只接收Runnable类型的元素。根据传入的队列性质不同，线程池的特性也不同。</li>
+</ol>
+<p>Executors是对构造方法的封装，通过传入不同的参数，使线程池具有不同的特性，不再详细描述。</p>
+<h2 id="总结">总结</h2>
+<ol>
+<li>每个worker对应一个thread，线程池通过控制worker的数量来控制并发线程数</li>
+<li>线程池实质是一个生产者消费者模型，它有一个任务队列和一个消费线程集合组成。</li>
+<li>任务通常会被提交到队列中，由消费线程执行。</li>
+<li>运行的worker线程会通过run方法调用外部类的runWorker方法不断消费任务。</li>
+</ol>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://yanchao0716.github.io/post/shen-ru-yuan-ma-pou-xi-threadjoin-shi-xian/">
+                  <h3 class="post-title">
+                    深入源码剖析Thread.join实现
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+<script type="application/javascript">
+
+AOS.init();
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+
+
+  </body>
+</html>

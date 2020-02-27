@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>深入源码剖析Thread.join实现 | yanchao&#39; blog</title>
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://yanchao0716.github.io/favicon.ico?v=1582812174249">
+<link rel="stylesheet" href="https://yanchao0716.github.io/styles/main.css">
+
+
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+
+
+
+    <meta name="description" content="java.lang.Thread类提供一个方法join可以阻塞主线程(调用join方法的线程)，直到当前线程执行完。用法如下：
+
+join会保证t2在t1线程执行完退出之后再执行，程序执行结果总是如下
+
+定义
+
+实现
+该方法掉用了join（..." />
+    <meta name="keywords" content="" />
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://yanchao0716.github.io">
+        <img src="https://yanchao0716.github.io/images/avatar.png?v=1582812174249" class="site-logo">
+        <h1 class="site-title">yanchao&#39; blog</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://yanchao0716.github.io/atom.xml" target="_blank">RSS</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">深入源码剖析Thread.join实现</h2>
+            <div class="post-date">2020-02-27</div>
+            
+            <div class="post-content" v-pre>
+              <p>java.lang.Thread类提供一个方法join可以阻塞主线程(调用join方法的线程)，直到当前线程执行完。用法如下：<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNTU3Nzk5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>join会保证t2在t1线程执行完退出之后再执行，程序执行结果总是如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNjMxODI5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="定义">定义</h2>
+<figure data-type="image" tabindex="1"><img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxNzI1OTIw?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></figure>
+<h2 id="实现">实现</h2>
+<p>该方法掉用了join（0）方法， 我们跟进查看具体实现。注意这里是一个静态方法加了同步锁，锁的是this，也就是当前类实例。我们知道在线程获取了锁以后再执行wait方法，会让线程释放掉锁，并且进入到等待阻塞状态，线程被唤醒或等待一定时间之后以后获取锁后会重新从wait的地方往下执行。<br>
+作者巧用了这个原理，先获取锁再调用wait(0)释放锁并让主线程进入等待阻塞。并且循环执行，一旦主线程重新获取锁就立马释放。这样就保证了主线程一直得不到执行。<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxODEzMzky?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>按照上诉代码，如果执行t.join(10 * 1000)那么主线程会阻塞10s，而事实并非如此，请看下面测试代码<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxODQzMDU0?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>输出如下<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxOTA2NDEx?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<p>这说明t线程执行完，main线程就得到执行，并没有阻塞10s，也就是说main线程得到了唤醒。翻看JVM源码发现在线程结束的时候会调用lock.notify_all(thread)唤醒线程<br>
+<img src="https://imgconvert.csdnimg.cn/aHR0cDovL2ltZy5ibG9nLmNzZG4ubmV0LzIwMTcxMDI3MjMxOTMyMzU5?x-oss-process=image/format,png" alt="这里写图片描述" loading="lazy"></p>
+<h2 id="总结">总结</h2>
+<ol>
+<li>java.lang.Thread.join方法通过循环阻塞主线程的方式保证当前线程优先执行</li>
+<li>当前线程执行完之后会立马唤醒主线程继续执行</li>
+</ol>
+<p>文章参考：https://www.zhihu.com/question/44621343/answer/97640972</p>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-linkedlist/">
+                  <h3 class="post-title">
+                    JDK源码走读之LinkedList
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+<script type="application/javascript">
+
+AOS.init();
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+
+
+  </body>
+</html>
