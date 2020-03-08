@@ -2,14 +2,406 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
     <id>https://yanchao0716.github.io</id>
     <title>yanchao&apos; blog</title>
-    <updated>2020-02-27T14:20:42.584Z</updated>
+    <updated>2020-03-08T16:43:15.340Z</updated>
     <generator>https://github.com/jpmonette/feed</generator>
     <link rel="alternate" href="https://yanchao0716.github.io"/>
     <link rel="self" href="https://yanchao0716.github.io/atom.xml"/>
-    <subtitle>温故而知新</subtitle>
+    <subtitle>总有一件值得让你付出热情</subtitle>
     <logo>https://yanchao0716.github.io/images/avatar.png</logo>
     <icon>https://yanchao0716.github.io/favicon.ico</icon>
     <rights>All rights reserved 2020, yanchao&apos; blog</rights>
+    <entry>
+        <title type="html"><![CDATA[Netty -从ServerBootstrap入手分析内部实现]]></title>
+        <id>https://yanchao0716.github.io/post/netty-cong-serverbootstrap-ru-shou-fen-xi-nei-bu-shi-xian/</id>
+        <link href="https://yanchao0716.github.io/post/netty-cong-serverbootstrap-ru-shou-fen-xi-nei-bu-shi-xian/">
+        </link>
+        <updated>2020-03-08T16:42:43.000Z</updated>
+        <content type="html"><![CDATA[<p>编写一个NIO Server用JDK NIO包实现非常繁琐，要绑定端口、监听客户端连接、监听数据、接收数据、处理数据。用Netty了了二三十行代码就实现了这些功能，我们知道Netty对JDK NIO进行了封装和改进，接下来从官方的Demo分析Netty的实现</p>
+<pre><code class="language-java">public class DiscardServer {
+    private int port;
+
+    public DiscardServer(int port) {
+        this.port = port;
+    }
+
+    public void run() throws Exception{
+        EventLoopGroup bossGroup = new NioEventLoopGroup();
+        EventLoopGroup workerGroup =  new NioEventLoopGroup();
+        try {
+            ServerBootstrap serverBootstrap = new ServerBootstrap();
+            serverBootstrap
+                    .group(bossGroup, workerGroup)
+                    .channel(NioServerSocketChannel.class)
+                    .childHandler(new ChannelInitializer&lt;SocketChannel&gt;() {
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new DiscardServerHandler());
+                        }
+                    })
+                    .option(ChannelOption.SO_BACKLOG, 128)
+                    .childOption(ChannelOption.SO_KEEPALIVE, true);
+
+            ChannelFuture future = serverBootstrap.bind(port).sync();
+            future.channel().closeFuture().sync();
+        }finally {
+            workerGroup.shutdownGracefully();
+            bossGroup.shutdownGracefully();
+        }
+    }
+
+
+    public static void main(String[] args) throws Exception {
+        int port = 8080;
+        if(args.length &gt; 0){
+            port = Integer.valueOf(args[0]);
+        }
+        new DiscardServer(port).run();
+    }
+}
+
+public class DiscardServerHandler extends ChannelInboundHandlerAdapter {
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        super.channelRead(ctx, msg);
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        super.exceptionCaught(ctx, cause);
+    }
+}
+</code></pre>
+<p>简化上边代码Netty的创建NIO Server的过程只需要几个步骤，按照以下几个步骤逐步解析</p>
+<pre><code class="language-java">serverBootstrap
+	.group() // 1
+	.channel() // 2
+	.childHandler() // 3
+	.option() // 4
+	.childOption() // 5
+	.bind(); // 6
+</code></pre>
+<h2 id="1group-设置处理器">1.group() 设置处理器</h2>
+<p>这里用来设置【处理用户请求的线程组】 和 【处理读写请求的线程组】。这里是reactor的核心部分，参见https://zhuanlan.zhihu.com/p/87630368</p>
+<pre><code class="language-java">	@Override
+    public ServerBootstrap group(EventLoopGroup group) {
+        return group(group, group);
+    }
+    
+     public ServerBootstrap group(EventLoopGroup parentGroup, EventLoopGroup childGroup) {
+        super.group(parentGroup);
+        if (this.childGroup != null) {
+            throw new IllegalStateException(&quot;childGroup set already&quot;);
+        }
+        this.childGroup = ObjectUtil.checkNotNull(childGroup, &quot;childGroup&quot;);
+        return this;
+    }
+</code></pre>
+<p>ServerBootstrap类持有group、childGroup俩个线程组，其中group在父类AbstractBootstrap中声明，这里调用group参数只是简单的给内部成员赋值。parentGroup用来异步处理用户注册请求；childGroup用来做IO事件回调处理，特别注意的是这里一个channel对应一个EvenLoop，netty巧妙规避了多线程并发问题提高了性能</p>
+<h2 id="2channel-设置channel类型">2.channel() 设置channel类型</h2>
+<pre><code class="language-java">	// 设置channel类型
+	public B channel(Class&lt;? extends C&gt; channelClass) {
+		// 实际构建了一个channel工厂
+        return channelFactory(new ReflectiveChannelFactory&lt;C&gt;(
+                ObjectUtil.checkNotNull(channelClass, &quot;channelClass&quot;)
+        ));
+    }
+
+	// 反射工厂的构造方法，实际保存了channel类的构造方法
+	public ReflectiveChannelFactory(Class&lt;? extends T&gt; clazz) {
+        ObjectUtil.checkNotNull(clazz, &quot;clazz&quot;);
+        try {
+            this.constructor = clazz.getConstructor();
+        } catch (NoSuchMethodException e) {
+            throw new IllegalArgumentException(&quot;Class &quot; + StringUtil.simpleClassName(clazz) +
+                    &quot; does not have a public non-arg constructor&quot;, e);
+        }
+    }
+	
+	public B channelFactory(io.netty.channel.ChannelFactory&lt;? extends C&gt; channelFactory) {
+        return channelFactory((ChannelFactory&lt;C&gt;) channelFactory);
+    }
+</code></pre>
+<h2 id="3childhandler-设置处理器">3.childHandler() 设置处理器</h2>
+<p>这里注册的是ChannelInitializer实现的，在服务端接受到连接的时候会调用initChannel方法给新建的channel设定一个处理器</p>
+<pre><code class="language-java">.childHandler(new ChannelInitializer&lt;SocketChannel&gt;() {
+                        protected void initChannel(SocketChannel ch) throws Exception {
+                            ch.pipeline().addLast(new DiscardServerHandler());
+                        }
+                    })
+</code></pre>
+<h2 id="4option-childoption-channel参数配置">4.option()、childOption() channel参数配置</h2>
+<p>配置channel参数，option对应的是boss线程组，childOption对应worker线程组，实现方别在AbstractBootstrap和ServerBootstrap，前者是后者的父类是个抽象类。boss线程组是在AbstractBootstrap里声明的，worker线程组是在ServerBootstrap中声明的。</p>
+<h2 id="5bind-端口绑定">5.bind() 端口绑定</h2>
+<pre><code>这里比较关键，执行bind方法，
+</code></pre>
+<pre><code class="language-java">	public ChannelFuture bind(int inetPort) {
+        return bind(new InetSocketAddress(inetPort));
+    }
+
+	public ChannelFuture bind(SocketAddress localAddress) {
+        validate();
+        return doBind(ObjectUtil.checkNotNull(localAddress, &quot;localAddress&quot;));
+    }
+
+	private ChannelFuture doBind(final SocketAddress localAddress) {
+		// 初始化并注册，这里很关键
+        final ChannelFuture regFuture = initAndRegister();
+        final Channel channel = regFuture.channel();
+        if (regFuture.cause() != null) {
+        	// 如果抛出异常，这里直接退出注册流程
+            return regFuture;
+        }
+		
+        if (regFuture.isDone()) {
+            ChannelPromise promise = channel.newPromise();
+            doBind0(regFuture, channel, localAddress, promise);
+            return promise;
+        } else {
+            final PendingRegistrationPromise promise = new PendingRegistrationPromise(channel);
+            regFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                    Throwable cause = future.cause();
+                    if (cause != null) {
+                        promise.setFailure(cause);
+                    } else {
+                        promise.registered();
+                        doBind0(regFuture, channel, localAddress, promise);
+                    }
+                }
+            });
+            return promise;
+        }
+    }
+</code></pre>
+<p>看下关键方法AbstractBootstrap.initAndRegister()</p>
+<pre><code class="language-java">final ChannelFuture initAndRegister() {
+        // 1.初始化channel
+        Channel channel = null;
+        try {
+            channel = channelFactory.newChannel();
+            init(channel);
+        } catch (Throwable t) {
+            if (channel != null) {
+                channel.unsafe().closeForcibly();
+                return new DefaultChannelPromise(channel, GlobalEventExecutor.INSTANCE).setFailure(t);
+            }
+            return new DefaultChannelPromise(new FailedChannel(), GlobalEventExecutor.INSTANCE).setFailure(t);
+        }
+		
+		// 2.注册channel
+        ChannelFuture regFuture = config().group().register(channel);
+        if (regFuture.cause() != null) {
+            if (channel.isRegistered()) {
+                channel.close();
+            } else {
+                channel.unsafe().closeForcibly();
+            }
+        }
+        return regFuture;
+    }
+</code></pre>
+<ol>
+<li>channelFactory.newChannel() 调用在第二步channel(Class&lt;? extends C&gt; channelClass)方法里构建的channelFactory来创建channel，然后调用init(channel)加载配置</li>
+</ol>
+<pre><code class="language-java">	public T newChannel() {
+        try {
+            return constructor.newInstance();
+        } catch (Throwable t) {
+            throw new ChannelException(&quot;Unable to create Channel from class &quot; + constructor.getDeclaringClass(), t);
+        }
+    }
+
+	void init(Channel channel) {
+        setChannelOptions(channel, options0().entrySet().toArray(EMPTY_OPTION_ARRAY), logger);
+        setAttributes(channel, attrs0().entrySet().toArray(EMPTY_ATTRIBUTE_ARRAY));
+
+        ChannelPipeline p = channel.pipeline();
+
+        final EventLoopGroup currentChildGroup = childGroup;
+        final ChannelHandler currentChildHandler = childHandler;
+        final Entry&lt;ChannelOption&lt;?&gt;, Object&gt;[] currentChildOptions =
+                childOptions.entrySet().toArray(EMPTY_OPTION_ARRAY);
+        final Entry&lt;AttributeKey&lt;?&gt;, Object&gt;[] currentChildAttrs = childAttrs.entrySet().toArray(EMPTY_ATTRIBUTE_ARRAY);
+
+        p.addLast(new ChannelInitializer&lt;Channel&gt;() {
+            @Override
+            public void initChannel(final Channel ch) {
+                final ChannelPipeline pipeline = ch.pipeline();
+                ChannelHandler handler = config.handler();
+                if (handler != null) {
+                    pipeline.addLast(handler);
+                }
+
+                ch.eventLoop().execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        pipeline.addLast(new ServerBootstrapAcceptor(
+                                ch, currentChildGroup, currentChildHandler, currentChildOptions, currentChildAttrs));
+                    }
+                });
+            }
+        });
+    }
+</code></pre>
+<ol start="2">
+<li>
+<p>config().group().register(channel)是注册channel到selector的方法。</p>
+<pre><code> config().group()实则获取的boss线程，实现如下
+</code></pre>
+</li>
+</ol>
+<pre><code class="language-java">	public final ServerBootstrapConfig config() {
+        return config;
+    }
+	
+	public final EventLoopGroup group() {
+        return bootstrap.group();
+    }
+</code></pre>
+<p>这里有很多类都实现了register()方法，由于我们调用group方法传入的NioEventLoopGroup，而NioEventLoopGroup又继承自MultithreadEventLoopGroup，所以我们应该看MultithreadEventLoopGroup的实现。</p>
+<pre><code class="language-java"> 	public ChannelFuture register(Channel channel) {
+        return next().register(channel);
+    }
+</code></pre>
+<p>next()方法实现很关键，用来选取一个EventLoop线程。调用链为MultithreadEventLoopGroup.next() -&gt; MultithreadEventExecutorGroup.next() -&gt; chooser.next() ，MultithreadEventExecutorGroup.next是MultithreadEventLoopGroup.next的父类，chooser是一个选择器封装了选取EventLoop线程的策略，netty自带实现有GenericEventExecutorChooser和PowerOfTwoEventExecutorChooser俩种</p>
+<pre><code class="language-java"> private static final class PowerOfTwoEventExecutorChooser implements EventExecutorChooser {
+        private final AtomicInteger idx = new AtomicInteger();
+        private final EventExecutor[] executors;
+
+        PowerOfTwoEventExecutorChooser(EventExecutor[] executors) {
+            this.executors = executors;
+        }
+
+        @Override
+        public EventExecutor next() {
+            return executors[idx.getAndIncrement() &amp; executors.length - 1];
+        }
+    }
+
+    private static final class GenericEventExecutorChooser implements EventExecutorChooser {
+        private final AtomicInteger idx = new AtomicInteger();
+        private final EventExecutor[] executors;
+
+        GenericEventExecutorChooser(EventExecutor[] executors) {
+            this.executors = executors;
+        }
+
+        @Override
+        public EventExecutor next() {
+            return executors[Math.abs(idx.getAndIncrement() % executors.length)];
+        }
+    }
+</code></pre>
+<p>选出一个EventLoop线程了,那接下来就看绑定方法register()的实现，实现在SingleThreadEventLoop里</p>
+<pre><code class="language-java">	public ChannelFuture register(Channel channel) {
+        return register(new DefaultChannelPromise(channel, this));
+    }
+
+    @Override
+    public ChannelFuture register(final ChannelPromise promise) {
+        ObjectUtil.checkNotNull(promise, &quot;promise&quot;);
+        promise.channel().unsafe().register(this, promise);
+        return promise;
+    }
+</code></pre>
+<p>这里调用的AbstractChannel的内部类abstarctUnsafe，register0会被封装成异步让我</p>
+<pre><code class="language-java">public final void register(EventLoop eventLoop, final ChannelPromise promise) {
+            ObjectUtil.checkNotNull(eventLoop, &quot;eventLoop&quot;);
+            if (isRegistered()) {
+                promise.setFailure(new IllegalStateException(&quot;registered to an event loop already&quot;));
+                return;
+            }
+            if (!isCompatible(eventLoop)) {
+                promise.setFailure(
+                        new IllegalStateException(&quot;incompatible event loop type: &quot; + eventLoop.getClass().getName()));
+                return;
+            }
+			
+			// 获取一个线程，这里是单线程实现的线程池
+            AbstractChannel.this.eventLoop = eventLoop;
+
+            if (eventLoop.inEventLoop()) {
+                register0(promise);
+            } else {
+                try {
+                	// 异步注册
+                    eventLoop.execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            register0(promise);
+                        }
+                    });
+                } catch (Throwable t) {
+                    logger.warn(
+                            &quot;Force-closing a channel whose registration task was not accepted by an event loop: {}&quot;,
+                            AbstractChannel.this, t);
+                    closeForcibly();
+                    closeFuture.setClosed();
+                    safeSetFailure(promise, t);
+                }
+            }
+        }
+</code></pre>
+<p>register0()通过调用doRegister()方法进行注册</p>
+<pre><code class="language-java"> 	private void register0(ChannelPromise promise) {
+            try {
+                if (!promise.setUncancellable() || !ensureOpen(promise)) {
+                    return;
+                }
+                boolean firstRegistration = neverRegistered;
+                // 这个方法很关键，真正执行注册实现在这里
+                doRegister();
+                neverRegistered = false;
+                registered = true;
+
+                pipeline.invokeHandlerAddedIfNeeded();
+
+                safeSetSuccess(promise);
+                pipeline.fireChannelRegistered();
+                if (isActive()) {
+                    if (firstRegistration) {
+                        pipeline.fireChannelActive();
+                    } else if (config().isAutoRead()) {
+                        beginRead();
+                    }
+                }
+            } catch (Throwable t) {
+                closeForcibly();
+                closeFuture.setClosed();
+                safeSetFailure(promise, t);
+            }
+        }
+</code></pre>
+<p>doRegister()实现在AbstractNioChannel中</p>
+<pre><code class="language-java">	protected void doRegister() throws Exception {
+        boolean selected = false;
+        for (;;) {
+            try {
+            	// 这里调用了JDK的NIO实现
+                selectionKey = javaChannel().register(eventLoop().unwrappedSelector(), 0, this);
+                return;
+            } catch (CancelledKeyException e) {
+                if (!selected) {
+                    eventLoop().selectNow();
+                    selected = true;
+                } else {
+                    throw e;
+                }
+            }
+        }
+    }
+</code></pre>
+<p>至此注册流程分析结束。最后做个回顾，使用Netty构建一个NIO server大致需要如下几个步骤：</p>
+<ol>
+<li>配置线程组，boss线程组负责处理用户请求、worker线程组负责处理IO</li>
+<li>配置Channel类型，并设置相关参数，非阻塞等</li>
+<li>设置处理器，不同方法分别对应建立连接、读写操作等事件</li>
+<li>绑定端口，由选举器chooser 从NiOEventLoopGroup里选出一个EventLoop异步进行端口绑定。</li>
+</ol>
+<p>Netty的封装极大的简化了开发，同时boss线程组、worker线程组把accepter和reactor解耦分别用线程组来实现提升了性能。boss线程组异步设计使得能够处理更多的用户请求、worker线程组只需要比连接少的多的线程就可以处理IO回调。每个Channel和一个EventLoop绑定消除了多线程数据同步问题，无所设计也极大的提升了性能，使得netty更顺滑的处理大量IO请求。</p>
+]]></content>
+    </entry>
     <entry>
         <title type="html"><![CDATA[JDK源码走读之ReentrantLock]]></title>
         <id>https://yanchao0716.github.io/post/jdk-yuan-ma-zou-du-zhi-reentrantlock/</id>
