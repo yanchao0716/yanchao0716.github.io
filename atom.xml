@@ -2,7 +2,7 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
     <id>https://yanchao0716.github.io</id>
     <title>yanchao&apos;s blog</title>
-    <updated>2020-03-10T14:18:03.232Z</updated>
+    <updated>2020-03-10T14:30:26.454Z</updated>
     <generator>https://github.com/jpmonette/feed</generator>
     <link rel="alternate" href="https://yanchao0716.github.io"/>
     <link rel="self" href="https://yanchao0716.github.io/atom.xml"/>
@@ -132,8 +132,7 @@ public class DiscardServerHandler extends ChannelInboundHandlerAdapter {
 <h2 id="4option-childoption-channel参数配置">4.option()、childOption() channel参数配置</h2>
 <p>配置channel参数，option对应的是boss线程组，childOption对应worker线程组，实现方别在AbstractBootstrap和ServerBootstrap，前者是后者的父类是个抽象类。boss线程组是在AbstractBootstrap里声明的，worker线程组是在ServerBootstrap中声明的。</p>
 <h2 id="5bind-端口绑定">5.bind() 端口绑定</h2>
-<pre><code>这里比较关键，执行bind方法，
-</code></pre>
+<p>这里比较关键，执行bind方法，</p>
 <pre><code class="language-java">	public ChannelFuture bind(int inetPort) {
         return bind(new InetSocketAddress(inetPort));
     }
