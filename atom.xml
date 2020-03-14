@@ -2,7 +2,7 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
     <id>https://yanchao0716.github.io</id>
     <title>yanchao&apos;s blog</title>
-    <updated>2020-03-11T01:23:24.270Z</updated>
+    <updated>2020-03-14T12:20:45.119Z</updated>
     <generator>https://github.com/jpmonette/feed</generator>
     <link rel="alternate" href="https://yanchao0716.github.io"/>
     <link rel="self" href="https://yanchao0716.github.io/atom.xml"/>
@@ -10,6 +10,24 @@
     <logo>https://yanchao0716.github.io/images/avatar.png</logo>
     <icon>https://yanchao0716.github.io/favicon.ico</icon>
     <rights>All rights reserved 2020, yanchao&apos;s blog</rights>
+    <entry>
+        <title type="html"><![CDATA[Spring @Scheduled线程模型探究 - 改为多线程]]></title>
+        <id>https://yanchao0716.github.io/post/spring-scheduled-xian-cheng-mo-xing-tan-jiu-gai-wei-duo-xian-cheng/</id>
+        <link href="https://yanchao0716.github.io/post/spring-scheduled-xian-cheng-mo-xing-tan-jiu-gai-wei-duo-xian-cheng/">
+        </link>
+        <updated>2020-03-14T12:20:18.000Z</updated>
+        <content type="html"><![CDATA[<p>通过上一节分析源码我们知道，执行任务的是TaskScheduler的实现类，在ScheduledAnnotationBeanPostProcessor#finishRegistration()方法中会设置TaskScheduler。<br>
+首先如果注册器ScheduledTaskRegistrar中的scheduler成员为空才会从Spring上下文中加载<br>
+<img src="https://img-blog.csdnimg.cn/20200314192850615.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"><br>
+我们只需要为ScheduledTaskRegistrar设置我们需要的TaskScheduler就好了。那么问题来了，这个registrar从哪里来？我们怎么才能访问到registrar并设置taskScheduler呢？<br>
+<img src="https://img-blog.csdnimg.cn/20200314201653801.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"><br>
+从这里我们可以看到，registrar对象在ScheduledAnnotationBeanPostProcessor初始化时创建，到这里断了思路不知如何下手。再仔细翻看finishRegistration()方法有了新的发现<br>
+<img src="https://img-blog.csdnimg.cn/20200314200550373.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"><br>
+这里获取了SchedulingConfigurer的实现类，并且把执行configureTasks方法传入了ScheduledTaskRegistrar，我们可以从这里做文章。<br>
+<img src="https://img-blog.csdnimg.cn/20200314201223399.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"><br>
+我们只需要给传入的taskRegistrar设置一个TaskScheduler就好可以了，好了大功告成~</p>
+]]></content>
+    </entry>
     <entry>
         <title type="html"><![CDATA[Netty -从ServerBootstrap入手分析内部实现]]></title>
         <id>https://yanchao0716.github.io/post/netty-cong-serverbootstrap-ru-shou-fen-xi-nei-bu-shi-xian/</id>
@@ -1343,79 +1361,6 @@ createExecutor()实现，可以看到创建了一个ScheduledExecutorService，�
 <p>最后再往回翻代码发现，ScheduledAnnotationBeanPostProcessor#setScheduler(Object)方法的注释已经说的很清楚，如果不进行配置，默认实现为单线程。<br>
 <img src="https://img-blog.csdnimg.cn/20200222190147831.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"></p>
 <p>接下来就是解决问题了，请见下篇《Spring @Scheduled线程模型探究 - 解决问题》。</p>
-]]></content>
-    </entry>
-    <entry>
-        <title type="html"><![CDATA[Spring @Scheduled线程模型探究 - 发现问题]]></title>
-        <id>https://yanchao0716.github.io/post/spring-scheduled-xian-cheng-mo-xing-tan-jiu-fa-xian-wen-ti/</id>
-        <link href="https://yanchao0716.github.io/post/spring-scheduled-xian-cheng-mo-xing-tan-jiu-fa-xian-wen-ti/">
-        </link>
-        <updated>2020-02-27T13:43:14.000Z</updated>
-        <content type="html"><![CDATA[<p>最近工程中发现一个奇怪的问题，简单代码逻辑如下所示：</p>
-<pre><code class="language-java">@EnableScheduling
-@Component
-public class SimpleImplement {
-    private static final Logger LOG = LoggerFactory.getLogger(SimpleImplement.class);
-
-    private volatile List&lt;String&gt; list = Collections.EMPTY_LIST;
-
-    private final Queue&lt;Thread&gt; waiters = Queues.newConcurrentLinkedQueue();
-
-    // 如果list为空挂起线程
-    public List&lt;String&gt; get(){
-        while(CollectionUtils.isEmpty(list)){
-            try {
-                Thread current = Thread.currentThread();
-                waiters.add(current);
-                LOG.info(&quot;list 为空挂起线程 {}.&quot;, current.getName());
-                LockSupport.park();
-            }catch (Exception e){}
-        }
-        return list;
-    }
-
-    // 异步更新list，如果list不为空则唤醒被挂起的线程
-    @Scheduled(fixedDelay = 1000)
-    private void sync(){
-        // 加载数据
-        list = ...;
-        if(CollectionUtils.isNotEmpty(list)){
-            Thread waiter = null;
-            while (!waiters.isEmpty()){
-                waiter = waiters.remove();
-                LOG.info(&quot;同步数据 list 不为空唤醒线程 {}.&quot;, waiter.getName());
-                LockSupport.unpark(waiter);
-            }
-        }
-    }
-</code></pre>
-<p>上边代码对list异步加载，调用get接口的时候如果list为空就挂起当前线程，待有数据加载时再进行唤醒。我们知道加锁也可以实现等待唤醒，这里用LockSupport是因为这里是异步加载数据不存在数据竞争问题，加锁会让多个线程串行执行，影响任务执行效率。</p>
-<p><em><strong>问题</strong></em><br>
-get()接口在工程中好几处被调用，测试发现被挂起的线程有时会唤醒失败。反复测试几次从日志中看被阻塞的线程都是 scheduling-1，看起像是定时器的线程。于是翻看了代码发现几处调用get()接口的地方都采用@Scheduled注解进行周期轮询。</p>
-<p><em><strong>分析</strong></em><br>
-怀疑这里可能是@Scheduled的实现是单线程，几处定时任务都是有同一个线程执行，如果这样调用sync()接口的线程也是调用get()接口的线程，如果被阻塞那么唤醒动作就一直得不到执行。</p>
-<p><em><strong>验证</strong></em><br>
-为了验证我们的想法，写了个简单的测试代码及结果如下:</p>
-<pre><code class="language-java">@Component
-@EnableScheduling
-public class ScheduledTest {
-    private static Logger LOG = LoggerFactory.getLogger(ScheduledTest.class);
-
-    @Scheduled(fixedDelay = 1000)
-    public void method1(){
-        LOG.info(&quot;线程 {} 执行method1 .&quot;, Thread.currentThread().getName());
-    }
-
-    @Scheduled(fixedDelay = 1000)
-    public void method2(){
-        LOG.info(&quot;线程 {} 执行method2 .&quot;, Thread.currentThread().getName());
-    }
-}
-</code></pre>
-<p><img src="https://img-blog.csdnimg.cn/2020022214412263.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3p5YzkyMDcxNg==,size_16,color_FFFFFF,t_70" alt="在这里插入图片描述" loading="lazy"><br>
-测试发现@Scheduled注解确实是单线程执行，执行method1和method2的线程都是scheduing-1，并且在打印完method1执行的log后5秒才打印method2的log，说明在这里scheduling-1在method1被阻塞了5秒。</p>
-<p>这里刚好验证了我们的猜想：<strong>被挂起的线程没有被唤醒，是因为执行唤醒和被挂起的是同一个线程</strong>。</p>
-<p>现在已经确定问题了，接下来就是怎么改。改之前去翻看下源码找到问题的根源，才能更好的解决问题，源码分析接下篇<a href="https://blog.csdn.net/zyc920716/article/details/104444109">《Spring @Scheduled线程模型探究 - 源码追踪》</a>。</p>
 ]]></content>
     </entry>
 </feed>
